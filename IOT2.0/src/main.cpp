@@ -34,7 +34,7 @@ static uint8_t mpuAddr = 0x68; // auto-check 0x69 if required
 static float gyroBiasX = 0, gyroBiasY = 0, gyroBiasZ = 0;
 static float qw = 1, qx = 0, qy = 0, qz = 0;
 static float refW = 1, refX = 0, refY = 0, refZ = 0;
-static float ix = 0, iy = 0, iz = 0;
+static float ix = 0, iy = 0, iz = 0; 
 static uint32_t prevSampleUs = 0;
 static uint8_t outputCount = 0;
 static bool sensorOK = false;
