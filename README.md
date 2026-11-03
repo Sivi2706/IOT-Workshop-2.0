@@ -1,4 +1,4 @@
-# Nano MPU6050 Live Ground Station — V1/V2-Compatible
+# Nano MPU6050 Live Ground Station
 
 **Project:** IOT2.0  
 **Current status:** Physical Arduino Nano + MPU6050 telemetry over USB Serial  
