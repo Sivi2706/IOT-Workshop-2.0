@@ -6,7 +6,7 @@
 **Document version:** 1.0 · **Updated:** 4 November 2026
 
 _Live bench-test ground station: the left window displays the simplified 3D rocket; the right window shows physical IMU plots and orientation graphics._  
-[View the original GitHub-hosted screenshot](https://github.com/user-attachments/assets/5eca60ba-9c1b-44d9-a969-27716c93c03b)
+<img width="593" height="362" alt="Screenshot 2026-11-04 050755" src="https://github.com/user-attachments/assets/5eca60ba-9c1b-44d9-a969-27716c93c03b" />
 
 > [!IMPORTANT]  
 > **Current, working data path:** Arduino Nano V3 + MPU6050 → USB Serial → Python ground station. 
