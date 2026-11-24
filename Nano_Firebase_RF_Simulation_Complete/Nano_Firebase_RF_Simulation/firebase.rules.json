@@ -1,0 +1,17 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "workshop": {
+      "rocket": {
+        "$station": {
+          ".read": "auth != null && (auth.uid === 'REPLACE_WITH_PUBLISHER_UID' || auth.uid === 'REPLACE_WITH_VIEWER_UID')",
+          ".write": "auth != null && auth.uid === 'REPLACE_WITH_PUBLISHER_UID'",
+          "recent": {
+            ".indexOn": ["sequence"]
+          }
+        }
+      }
+    }
+  }
+}
