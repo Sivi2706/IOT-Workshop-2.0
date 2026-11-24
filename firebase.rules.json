@@ -1,0 +1,13 @@
+{
+  "rules": {
+    "nanoTelemetry": {
+      "$uid": {
+        "latest": {
+          ".read": "auth != null && auth.uid === $uid && auth.token.firebase.sign_in_provider === 'anonymous'",
+          ".write": "auth != null && auth.uid === $uid && auth.token.firebase.sign_in_provider === 'anonymous' && newData.exists()",
+          ".validate": "newData.hasChildren(['sequence', 'nano_uptime_ms', 'server_received_unix_ms', 'quaternion_wxyz', 'acceleration_g_xyz', 'gyro_dps_xyz'])"
+        }
+      }
+    }
+  }
+}

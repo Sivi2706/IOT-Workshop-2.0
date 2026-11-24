@@ -1,7 +1,0 @@
-.env
-__pycache__/
-*.pyc
-.pio/
-.vscode/
-ground_station/cloud_capture.csv
-ground_station/nano_live_log.csv
