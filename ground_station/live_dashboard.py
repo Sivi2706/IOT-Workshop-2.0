@@ -41,6 +41,9 @@ class LiveFrame:
     accel: tuple[float,float,float]
     gyro: tuple[float,float,float]
     stationary: bool | None
+    baro_altitude_m: float | None = None
+    baro_pressure_hpa: float | None = None
+    baro_temperature_c: float | None = None
 
     def get(self, field: str):
         if field in ('pitch', 'yaw', 'roll'):
@@ -52,6 +55,9 @@ class LiveFrame:
         if field == 'gy': return self.gyro[1]
         if field == 'gz': return self.gyro[2]
         if field == 'accel_mag': return math.sqrt(sum(v*v for v in self.accel))
+        if field == 'altitude': return self.baro_altitude_m
+        if field == 'pressure': return self.baro_pressure_hpa
+        if field == 'temperature': return self.baro_temperature_c
         if field == 'gyro_mag': return math.sqrt(sum(v*v for v in self.gyro))
         return None
 
@@ -80,12 +86,17 @@ class LiveFlight:
         self.last_ms: int | None = None
         self.seconds = 0.0
         self.received = 0
+        self.latest_baro = None  # (timestamp_ms, pressure_hPa, temp_C, altitude_m)
+
+    def add_baro(self, timestamp_ms: int, pressure_hpa: float, temperature_c: float, altitude_m: float):
+        self.latest_baro = (timestamp_ms, pressure_hpa, temperature_c, altitude_m)
 
     def reset_history(self):
         self.frames.clear()
         self.start_ms = None
         self.last_ms = None
         self.seconds = 0.0
+        self.latest_baro = None
 
     def add(self, packet) -> LiveFrame:
         t_ms, q_sensor, accel, gyro, stationary = packet
@@ -100,9 +111,17 @@ class LiveFlight:
         # supports the optional --nose-axis/--turn mounting transform.
         q_model = q_sensor if stationary is None else map_sensor_to_rocket(q_sensor, self.align)
         x,y,z = euler_degrees(q_model)
+        baro = self.latest_baro
+        if baro is not None and abs(baro[0] - t_ms) <= 1500:
+            pressure_hpa, temperature_c, altitude_m = baro[1:]
+        else:
+            pressure_hpa = temperature_c = altitude_m = None
         f = LiveFrame(time=self.seconds, timestamp_ms=t_ms,
                       quaternion=q_model, pitch=x, yaw=y, roll=z,
-                      accel=accel, gyro=gyro, stationary=stationary)
+                      accel=accel, gyro=gyro, stationary=stationary,
+                      baro_altitude_m=altitude_m,
+                      baro_pressure_hpa=pressure_hpa,
+                      baro_temperature_c=temperature_c)
         self.frames.append(f)
         self.received += 1
         return f
@@ -158,6 +177,18 @@ class NanoSerialPump:
             if not line:continue
             if line.startswith('#'):
                 statuses.append(line)
+            elif line.startswith('B,'):
+                try:
+                    fields = line.split(',')
+                    if len(fields) != 5:
+                        raise ValueError('Wrong BMP280 field count')
+                    timestamp = int(fields[1])
+                    vals = tuple(float(v) for v in fields[2:])
+                    if timestamp < 0 or not all(math.isfinite(v) for v in vals):
+                        raise ValueError('Invalid BMP280 readings')
+                    statuses.append('# BARO_DATA,' + ','.join(fields[1:]))
+                except (ValueError, IndexError):
+                    self.dropped += 1
             elif line.startswith('Q,'):
                 count = len(line.split(','))
                 if count not in (12, 13):
@@ -355,6 +386,14 @@ class LiveGroundStation(tk.Tk):
             packets, messages=self.pump.poll()
             if messages:
                 for line in messages:
+                    if line.startswith('# BARO_DATA,'):
+                        try:
+                            fields = line[len('# BARO_DATA,'):].split(',')
+                            self.flight.add_baro(int(fields[0]), float(fields[1]),
+                                                 float(fields[2]), float(fields[3]))
+                        except (ValueError, IndexError):
+                            pass
+                        continue
                     self.last_msg=line.lstrip('# ').strip()
                     if 'ORIGIN_ZEROED' in line:
                         # Keep the graph from before the command? No: a new origin is a new session.
@@ -392,7 +431,10 @@ class LiveGroundStation(tk.Tk):
                 card.winfo_children()[0].config(text=label)
                 value=frame.get(key) if frame else None
                 card.value.config(text=f'{value:,.2f} {units}' if value is not None else 'N/A')
-                card.visual.update_history(f.history(key),available=key in ('ax','ay','az','gx','gy','gz','gyro_mag','accel_mag'))
+                available = (key in ('ax','ay','az','gx','gy','gz','gyro_mag','accel_mag') or
+                             (key in ('altitude','pressure','temperature') and
+                              frame is not None and frame.get(key) is not None))
+                card.visual.update_history(f.history(key),available=available)
             else:
                 field=('pitch','yaw','roll')[i-5]
                 val=frame.get(field) if frame else None
@@ -418,9 +460,12 @@ class LiveGroundStation(tk.Tk):
             error = getattr(self.serial, 'last_error', None)
             cloud_note = f' • CLOUD: {cloud_state} • SEQ: {seq if seq is not None else "?"} • GAPS: {gaps}'
             if error: cloud_note += f' • {error[:130]}'
+        baro_note = ('BMP280 pressure/temperature/relative altitude available; RSSI N/A'
+                     if frame is not None and frame.baro_pressure_hpa is not None
+                     else 'NO BMP280 DATA / RSSI N/A')
         self.status.config(text=f'{self.port_name} • {stream} • {f.received} packets • '
                           f'STATIONARY: {still}{cloud_note}  |  {self.last_msg}  |  '
-                          f'NO ALTITUDE/PRESSURE/RSSI FROM MPU6050')
+                          f'{baro_note}')
 
     def shutdown(self):
         try:self.serial.close()

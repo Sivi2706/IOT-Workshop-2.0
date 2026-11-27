@@ -532,8 +532,10 @@ def main(argv=None):
     options.add_argument('--demo',action='store_true',help='Play clearly labeled synthetic sample (not OpenRocket)')
     options.add_argument('--port',help='LIVE physical Nano MPU6050 serial port, e.g. COM4')
     options.add_argument('--firebase',action='store_true',help='Auto-detect the local Nano and publish its packets to Firebase (default)')
+    options.add_argument('--esp32-cloud',action='store_true',help='Receive ESP32 telemetry directly from Firebase (no USB)')
     parser.add_argument('--baud',type=int,default=115200,help='Serial baud rate for --port')
     parser.add_argument('--firebase-port', help='Override USB detection in Firebase mode')
+    parser.add_argument('--esp32-uid', help='Anonymous UID displayed by ESP32 after Firebase login')
     parser.add_argument('--hz',type=float,default=2,help='Maximum Firebase writes per second (up to 5)')
     parser.add_argument('--nose-axis',choices=['+x','-x','+y','-y','+z','-z'],default='+z',
                         help='MPU6050 axis pointing to imaginary rocket nose (live mode)')
@@ -549,7 +551,26 @@ def main(argv=None):
         parser.error('--firebase-port applies to Firebase mode only')
     if not 0 < args.hz <= 5:
         parser.error('--hz must be greater than 0 and at most 5')
-    if args.firebase or not (args.port or args.csv or args.demo):
+    if args.esp32_cloud:
+        if not args.esp32_uid:
+            parser.error('--esp32-cloud requires --esp32-uid from the ESP32 Serial Monitor')
+        try:
+            from esp32_cloud_receiver import Esp32CloudAdapter
+            from live_dashboard import LiveGroundStation
+            adapter = Esp32CloudAdapter(args.esp32_uid)
+            app = LiveGroundStation(adapter, 'ESP32 -> FIREBASE',
+                                    nose_axis=args.nose_axis,turn=args.turn,
+                                    view=args.view,record=args.record,
+                                    auto_3d=not args.no_3d)
+            try:
+                app.mainloop()
+            finally:
+                adapter.close()
+            return 0
+        except (OSError, ValueError, ImportError, tk.TclError) as exc:
+            print(f'ESP32 CLOUD ERROR: {exc}',file=sys.stderr)
+            return 1
+    if args.firebase or not (args.port or args.csv or args.demo or args.esp32_cloud):
         try:
             from firebase_receiver import FirebaseSerialAdapter
             from live_dashboard import LiveGroundStation

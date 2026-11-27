@@ -1,365 +1,227 @@
-# Nano MPU6050 Live Ground Station
+# IOT-Workshop-2.0 — ESP32 + MPU6050 + 6-pin BMP280 → Firebase → Ground Station
 
-**Project:** IOT2.0  
-**Current status:** Physical Arduino Nano + MPU6050 telemetry over USB Serial  
-**Future scope:** OpenRocket simulation → Firebase Realtime Database → ground station  
-**Document version:** 1.0 · **Updated:** 4 November 2026
+A beginner-focused ESP32 firmware with a **readable `src/main.cpp`** that shows
+JSON construction, **HTTP PUT** (send), HTTP status, and **HTTP GET** (receive),
+plus BMP280 pressure, temperature and relative altitude.
 
-_Live bench-test ground station: the left window displays the simplified 3D rocket; the right window shows physical IMU plots and orientation graphics._  
-<img width="593" height="362" alt="Screenshot 2026-11-04 050755" src="https://github.com/user-attachments/assets/5eca60ba-9c1b-44d9-a969-27716c93c03b" />
+Original Nano USB publisher and Python dashboard retained from the supplied project.
 
-> [!IMPORTANT]  
-> **Current, working data path:** Arduino Nano V3 + MPU6050 → USB Serial → Python ground station. 
-## 1. Purpose and present system
+## Folder structure
 
-The purpose is to visualize movement of a breadboard-mounted **Arduino Nano V3 + MPU6050** in a rocket-themed ground station. The Nano estimates orientation and transmits accelerometer, gyroscope, and quaternion readings to a Windows PC, where Python displays live plots and the rocket's relative attitude.
-
-### Current physical bench test
-
-```
-MPU6050 ──I²C──> Arduino Nano V3 ──USB Serial / COM3──> Python dashboard
-                                                        ├── Live IMU plots
-                                                        ├── Pitch / yaw / axial-roll views
-                                                        └── Simplified 3D rocket
-```
-
-### Planned cloud simulation
-
-```
-OpenRocket simulation ──> CSV export ──> Python playback publisher
-                                                │
-                                         Firebase Realtime Database
-                                                │
-                                      Python cloud ground station
-                                                ├── Flight graphs
-                                                ├── 3D attitude
-                                                └── Trajectory (if position data exists)
+```text
+IOT_Workshop_2_Beginner_Modular/
+  platformio.ini
+  firebase.config.json
+  firebase.rules.json
+  requirements.txt
+  Nano_original_reference.cpp       # reference only (NOT compiled)
+  src/
+    main.cpp                        # BEGIN HERE: send/receive demonstration
+    mpu6050.cpp / mpu6050.h         # I2C + quaternion calculations
+    bmp280.cpp / bmp280.h           # Barometer, temperature, relative altitude
+    firebase.cpp / firebase.h       # verified HTTPS + anonymous auth
+    secrets.h / secrets.example.h   # enter Wi-Fi locally
+  ground_station/
+    dashboard.py                    # original dashboard, + ESP32 cloud option
+    esp32_cloud_receiver.py         # anonymous read-only cloud viewer
+    ...                             # original Nano publisher/helper scripts
 ```
 
-**Source distinction:** Physical sensor data must not be labeled OpenRocket simulation data. A Firebase-based simulation does not represent actual radio-frequency reception. Neither path controls ignition, CO₂ release, ejection, deployment, or other flight-critical hardware.
+## Hardware
 
-## 2. Current project files
+ESP32 DevKit (ESP-WROOM-32) → GY-521 MPU6050:
 
-Place `ground_station/` alongside `src/` in the **existing working PlatformIO project**:
-
-```
-IOT2.0/
-├── platformio.ini                  # Keep your working Nano settings
-├── src/
-│   └── main.cpp                   # Keep the current working firmware
-├── ground_station/
-│   ├── dashboard.py               # Launch USB, demo, or CSV mode
-│   ├── live_dashboard.py          # V1/V2 Serial receiver and live graphs
-│   ├── attitude_math.py          # Quaternion math and axis mapping
-│   ├── telemetry.py              # Offline OpenRocket CSV importer
-│   ├── requirements.txt          # Python dependencies
-│   └── synthetic_demo_not_openrocket.csv
-├── assets/
-│   └── live_ground_station.png    # Image used at the top of this README
-└── tests/
-    └── test_live.py              # Optional receiver tests
-```
-
-The compatibility release can contain reference copies of `src/main.cpp` and `platformio.ini`. **Do not overwrite your working copies** simply to install the receiver fix. The V1/V2 packet-compatibility change belongs in `ground_station/live_dashboard.py`.
-
-## 3. Hardware and software
-
-|Item|Current use|
+| ESP32 | MPU6050 module |
 |---|---|
-|Arduino Nano V3 / ATmega328P|Reads the MPU6050 and outputs USB Serial data|
-|MPU6050|3-axis accelerometer and 3-axis gyroscope|
-|Nano A4|I²C SDA|
-|Nano A5|I²C SCL|
-|GND and suitable supply|Common ground; voltage appropriate for the sensor breakout|
-|USB data cable|Connects the Nano to the Windows PC|
-|VS Code + PlatformIO|Builds/uploads firmware and provides the Serial Monitor|
-|Windows Python 3 + `pyserial`|Runs the dashboard and receives Serial packets|
+| GPIO21 | SDA |
+| GPIO22 | SCL |
+| 3V3 | VCC |
+| GND | GND |
 
-> [!CAUTION]  
-> Check the **specific MPU6050 breakout board** before powering it. A bare MPU6050 uses 3.3 V logic and is not 5 V tolerant. Add level shifting where required.
+The MPU6050 is probed at **0x68**. Mount the sensor securely and keep it stationary
+while calibrating. Use a **2.4 GHz Wi-Fi** network.
 
-The Nano has **no built-in Wi-Fi**. The observed Serial port for this setup is **COM3**, but Windows may assign another port after reconnection.
+## 6-pin BMP280 wiring — same I2C bus as the MPU6050
 
-## 4. Start the live physical dashboard in VS Code
+Connect **both** sensor boards to the same SDA (GPIO21) and SCL (GPIO22) lines:
 
-From a terminal opened in the **correct `IOT2.0` project root**:
-
-1. Keep the Nano connected by USB, with the MPU6050 wired and the working firmware uploaded.
-    
-2. Close the PlatformIO/Arduino **Serial Monitor** and any other Python program using COM3. Closing the monitor does **not** stop the Nano firmware.
-    
-3. Install the Python Serial library if it is not already installed:
-    
-    ```
-    py -m pip install pyserial
-    ```
-    
-4. Start the dashboard:
-    
-    ```
-    py ground_station/dashboard.py --port COM3 --nose-axis=+z
-    ```
-    
-5. Keep the breadboard still while the Nano restarts/calibrates after its Serial port opens. Once calibration finishes, valid `Q,...` packets should begin to arrive.
-    
-
-### Other commands
-
-**Open the original eight-panel telemetry layout:**
-
-```
-py ground_station/dashboard.py --port COM3 --view telemetry
-```
-
-**Run without automatically opening the separate 3D rocket window:**
-
-```
-py ground_station/dashboard.py --port COM3 --no-3d
-```
-
-**Record physical sensor readings:**
-
-```
-py ground_station/dashboard.py --port COM3 --record ground_station/nano_live_log.csv
-```
-
-**Test the GUI without the Nano (synthetic demo, not OpenRocket data):**
-
-```
-py ground_station/dashboard.py --demo
-```
-
-**Replay an exported OpenRocket CSV locally (not through COM3):**
-
-```
-py ground_station/dashboard.py --csv "C:\path\to\openrocket_export.csv"
-```
-
-### Diagnosing Serial communication
-
-Use **PlatformIO → Project Tasks → Monitor** in VS Code. If `pio` is not recognized in PowerShell, use the full executable path:
-
-```
-& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" device monitor --port COM3 --baud 115200
-```
-
-Press **Ctrl+C** to exit the monitor before starting the dashboard. Keep the Nano powered. If the firmware must be uploaded, use the already verified PlatformIO environment/bootloader and active project folder.
-
-## 5. Serial packet formats and compatibility
-
-### V1 firmware: 12 fields (including `Q`)
-
-Your working Nano produced:
-
-```
-# NANO MPU6050 3D ROCKET ORIENTATION DEMO
-# MPU6050 WHO_AM_I=0x68, I2C addr=0x68
-# CALIBRATING: keep board COMPLETELY STILL for ~1.5 seconds
-# ORIGIN_ZEROED
-# READY gyro bias dps: 0.079,-3.026,-0.269
-Q,2366,1.000000,0.000027,0.000011,0.000002,0.153,0.009,1.092,0.02,0.06,0.02
-```
-
-**V1 packet definition:**
-
-```
-Q,time_ms,qw,qx,qy,qz,ax_g,ay_g,az_g,gx_deg_s,gy_deg_s,gz_deg_s
-```
-
-### V2 firmware: 13 fields
-
-The newer firmware appends `stationary` (0 = moving, 1 = stationary):
-
-```
-Q,time_ms,qw,qx,qy,qz,ax_g,ay_g,az_g,gx_deg_s,gy_deg_s,gz_deg_s,stationary
-```
-
-### Compatibility rules
-
-- The patched `ground_station/live_dashboard.py` accepts **both** packet lengths.
-- For **V1**, `STATIONARY: ?` is expected because no stationary flag is transmitted.
-- **V1** sends a calibration-relative quaternion using its original reference convention. The V2 sensor-to-model mounting transform is not automatically applicable to V1. In particular, `--nose-axis` and `--turn` cannot reliably correct V1's mounting axes; validate an axis-mapping change against physical motion.
-- The working V1 firmware outputs roughly one `Q,...` packet every **20 ms (50 Hz)**. Screen refresh may be slower.
-- Lines beginning with `#` are **status messages**, not telemetry packets.
-- `time_ms` measures time since Nano startup, **not** OpenRocket simulated flight time.
-
-## 6. Dashboard functions and measurement limits
-
-|Control or view|Function|
-|---|---|
-|**IMU VIEW**|Acceleration X/Y/Z and gyroscope-related live trends|
-|**SHOW TELEMETRY VIEW**|Flight-style panels; missing measurements remain **N/A**|
-|**Pitch / +X, Yaw / +Y, Axial roll / +Z**|Relative orientation angles calculated from incoming quaternion data|
-|**3D ROCKET**|Simplified rocket rotates with estimated attitude; no geographic position|
-|**ZERO ORIGIN (Z)**|Requests a new orientation zero from the Nano|
-|**CALIBRATE (C)**|Re-estimates gyroscope bias; keep breadboard still|
-|**CLEAR GRAPHS**|Clears local plot history without re-calibrating the Nano|
-|`--record`|Saves incoming readings as a CSV on the PC|
-
-**Not available from an MPU6050 alone:** altitude, vertical velocity, atmospheric pressure, ambient temperature, RSSI, latitude/longitude, or a physical rocket trajectory. Never fill these channels with invented values.
-
-The MPU6050 has **no magnetometer**, so yaw/heading is not absolute and can drift. Example `ax=0.153 g` and `az=1.092 g` values are accelerometer measurements—not altitude or position.
-
-### Troubleshooting
-
-|Symptom|Action|
-|---|---|
-|Dashboard stays at 0 packets and reports **legacy 12-field packet**|Replace `ground_station/live_dashboard.py` with the compatible receiver file|
-|Repeated `# NANO MPU6050...` startup messages|Check for USB/board resets, power stability, reset behavior, and wiring; repetition alone does not identify the cause|
-|Sensor initializes but no `Q,...` lines arrive|Look for `# CALIBRATING`, `# READY`, and I²C errors; hold sensor still during calibration|
-|COM port busy / access denied|Close the Serial Monitor and any other program using the same COM port|
-|Dashboard immediately exits|Run from PowerShell to inspect the traceback, working directory, and Python dependencies|
-|Orientation axes do not match the breadboard|Check physical sensor mounting. V1/V2 quaternion conventions differ; validate axes before changing firmware|
-|Flight telemetry panels show N/A|Expected without additional sensors or simulated flight fields|
-
-## 7. Future development — OpenRocket simulation through Firebase
-
-### Overall goal
-
-Reuse the same ground-station visual interface with a selectable data source: **physical USB Serial**, **offline OpenRocket CSV**, or **cloud-fed OpenRocket simulation**. The cloud path replaces the _proposed telemetry transport_ for a workshop demonstration; it is **not a test of RF performance or flight communications reliability**.
-
-```
-OpenRocket (.ork)
-    │ Run simulation / choose export channels
-    ▼
-Exported CSV
-    ├──────────────────> Offline dashboard (validation baseline)
-    ▼
-Python CSV parser + unit normalization
-    ▼
-Time-controlled playback publisher
-    │ HTTPS + authenticated credentials
-    ▼
-Firebase Realtime Database
-    ├── /workshop/rocket/demo01/latest
-    └── /workshop/rocket/demo01/events     (optional future history)
-    │ Authenticated snapshot reader / listener
-    ▼
-Ground-station adapter
-    ▼
-Existing dashboard
-    ├── Flight graphs and events
-    ├── 3D attitude (only where source data supports it)
-    └── Trajectory (only with position data)
-
-Future optional control path:
-NFC tag → phone → authenticated simulation command → Firebase → PC publisher
-```
-
-### Implementation phases
-
-|Phase|Work|Definition of done|Status|
-|---|---|---|---|
-|**0 — Physical baseline**|Nano + MPU6050 over USB; accept V1/V2 packets|Correct live IMU/attitude values and saved test log|Compatibility implemented; user-side dashboard confirmation pending|
-|**1 — OpenRocket export**|Export a complete flight with selected channels|Preserve original CSV; document headers, units, and omissions|Planned|
-|**2 — Offline replay**|Normalize units; replay by simulation timestamps|Altitude/velocity values agree with CSV at key events|Reader exists; validation against actual export pending|
-|**3 — Firebase publisher**|Authenticated Python publisher; 2–5 Hz initial rate|Named session visible in Firebase; error/reconnect behavior checked|Separate prototype; not integrated here|
-|**4 — Firebase ground station**|Receive cloud samples using same canonical data model|Second PC shows correct replay, freshness, and disconnection state|Separate prototype; integration pending|
-|**5 — Workshop/NFC**|Compare sources; NFC controls simulation playback|Secure start/pause/reset; no cloud-controlled deployment outputs|Planned|
-
-### Suggested OpenRocket export fields
-
-Choose the relevant variables in **Flight simulations → Plot / export → Export data**, when available in your OpenRocket version:
-
-|OpenRocket variable|Proposed canonical field|Notes|
+| ESP32 pin | GY-521 MPU6050 | 6-pin BMP280 module |
 |---|---|---|
-|Time (s)|`sim_time_s`|Required simulation clock|
-|Altitude (m)|`altitude_m`|Vertical height|
-|Vertical velocity (m/s)|`vertical_velocity_m_s`|Signed ascent/descent rate|
-|Air pressure (Pa)|`pressure_pa`|Display mbar as Pa ÷ 100|
-|Air temperature (K or °C)|`temperature_c`|If kelvin, subtract 273.15|
-|Vertical orientation / zenith|`zenith_rad`|Tilt, where exported|
-|Lateral orientation / azimuth|`azimuth_rad`|Direction of tilt, where exported|
-|Roll angle or roll rate|`roll_rad`|A rate alone needs integration assumptions|
-|East / North of launch (m)|`east_m`, `north_m`|Needed for horizontal trajectory|
-|Events|`events`|Source-provided or explicitly labeled derived events|
+| 3V3 | VCC | VCC / VIN (3.3 V recommended) |
+| GND | GND | GND |
+| GPIO21 | SDA | SDA / SDI |
+| GPIO22 | SCL | SCL / SCK |
+| 3V3 | — | CSB / CS (tie HIGH for I2C) |
+| GND | — | SDO (choose address **0x76**) |
 
-Azimuth and zenith are **not automatically identical** to a full three-axis Euler orientation. Reconstruct 3D attitude only using a documented and tested conversion. With only altitude, show a **vertical-height display**, not an invented geographic track. OpenRocket simulations do **not** contain measured RF RSSI.
+**Important:** Use the printed pin labels on your BMP280 board; 6-pin breakout
+pin **order varies**. If your board has built-in CSB and SDO pull-ups,
+connecting SDO to 3V3 gives **0x77** instead. Firmware detects both.
+Do **not** feed 5 V to a bare 3.3 V-only BMP280 module; some breakouts have
+regulators, others do not. A 3.3 V supply is a safer default for this ESP32 lab.
+If your 6-pin module has its own I2C pull-ups, they must pull to 3.3 V, not 5 V.
+If your module already ties CSB HIGH internally, leave it as-is; an external
+connection is not needed. If the SDO pin already has a pull-up or pull-down,
+use that defined state or wire SDO explicitly to select the address.
 
-### Proposed shared Firebase telemetry schema
+**What the barometer measures:** atmospheric pressure (Pa) and chip temperature
+(°C). The program averages pressure during startup and calculates
+**relative altitude (m)** from subsequent pressure changes. This is an
+approximate pressure-based height change, NOT GPS altitude or absolute
+height above sea level; wind, pressure drift and indoor air effects matter.
+Keep the BMP280 still for a second at startup to establish its reference.
+It samples at about **20 Hz** independently of the network's target 2 Hz upload.
+If the BMP280 is disconnected, the IMU/Firebase path still operates and
+BMP280 JSON fields are **omitted**, not replaced by misleading zeros.
 
-_The example values below are illustrative, not observations from the Nano or an OpenRocket flight._
+## First-time installation (Windows, VS Code + PlatformIO)
 
-```
-{
-  "schema_version": 1,
-  "session_id": "demo01",
-  "source": "openrocket_simulation",
-  "sequence": 42,
-  "sim_time_s": 8.4,
-  "altitude_m": 628.2,
-  "vertical_velocity_m_s": 37.5,
-  "pressure_pa": null,
-  "temperature_c": null,
-  "attitude": {
-    "zenith_rad": null,
-    "azimuth_rad": null,
-    "roll_rad": null
-  },
-  "position": {
-    "east_m": null,
-    "north_m": null
-  },
-  "phase": "COAST",
-  "rssi_dbm": null
-}
-```
+1. **Make a backup** of your existing working PlatformIO project.
+2. Extract this ZIP into a new folder and open **that folder** in VS Code.
+3. Edit `src/secrets.h`: replace Wi-Fi placeholders with the local SSID and password.
+   Do not commit `src/secrets.h` to Git.
+4. Attach the ESP32 on COM5 (change `upload_port` in `platformio.ini` if needed).
+5. From the PlatformIO Terminal, run:
 
-Use `null` for unavailable fields. Include schema version, source, session ID, sequence number, and **well-defined timestamps** to distinguish fresh telemetry from repeated or stale samples. Server receipt time and simulation time refer to different clocks.
-
-### Firebase design and security
-
-- Use **Firebase Realtime Database** if reusing the earlier REST-based Python publisher/client; this is distinct from Firestore.
-- Create a test Firebase project and record its **regional database URL**.
-- Authenticate publishers and viewers separately; restrict write permissions to the publisher's session and read permissions to authorized viewers. **Do not enable open public read/write rules.**
-- Store credentials in environment variables or a secret store, **not** in `main.cpp`, `platformio.ini`, screenshots, or a Git repository.
-- A `/latest` node is simple but overwrites earlier data. Polling may miss intermediate samples. Add a bounded history or event store if complete plots are required.
-- Start around **2–5 published updates per second** while validating latency and database usage; the Nano's 50 Hz USB cadence is not a Firebase delivery guarantee.
-- Show **STALE/DISCONNECTED** after data becomes old. Do not silently substitute synthetic data as live measurement.
-- **Never** connect Firebase/NFC controls to real ignition, CO₂, ejection, separation, or other flight-critical outputs. NFC can safely control a simulation player or indicator.
-
-### Planned source abstraction
-
-```
-class TelemetrySource:
-    def next_frame(self):
-        """Return a validated canonical telemetry frame, or None."""
-        raise NotImplementedError
-
-# SerialNanoSource     -> physical Q packets (current)
-# OpenRocketCSVSource  -> offline simulation replay (prototype)
-# FirebaseSource       -> authenticated cloud snapshots (future integration)
+```powershell
+pio run -e esp32_firebase
+pio run -e esp32_firebase -t upload --upload-port COM5
+pio device monitor -p COM5 -b 115200
 ```
 
-The unified dashboard should prominently identify **SOURCE: NANO**, **SOURCE: OPENROCKET CSV**, or **SOURCE: FIREBASE SIMULATION**. Never merge Nano boot time with OpenRocket `sim_time_s` as though they were the same clock.
+If `pio` isn't on PATH, use:
 
-## 8. Acceptance checklist
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e esp32_firebase
+```
 
-### Current USB-compatible version
+**Expected messages:** Wi-Fi connected, Firebase UID, then `# SEND (HTTP PUT)`,
+`# HTTP 204`, and `# SENT`. The HTTP 204 response means the server accepted the
+write and returned **no body**. The code avoids `getString()` on a 204 response.
 
-- [ ] `py ground_station/dashboard.py --port COM3` opens the live interface.
-- [ ] PlatformIO/Arduino Serial Monitor is closed and COM3 is free.
-- [ ] `# READY...` is followed by continuous `Q,...` data.
-- [ ] Dashboard packet count increases beyond zero.
-- [ ] Stationary orientation changes only minimally; V1 does not need a `stationary` flag.
-- [ ] Physical breadboard rotations correspond to the attitude graphics.
-- [ ] `--record` creates a readable physical telemetry CSV.
-- [ ] Unavailable channels remain **N/A**.
+While the monitor is open, type **R** and press Enter to execute an **HTTP GET**.
+The ESP32 should report HTTP 200 and print the JSON received from Firebase.
 
-### Future OpenRocket/Firebase milestones
+**IMPORTANT:** The sketch targets **Arduino-ESP32 2.0.17** through PlatformIO's
+`espressif32` platform. It uses the verified `setCACert()` root PEM approach that
+worked in the original ESP32_NANO_AUTH_PEM_V1 firmware. It does not use
+`ESP32CertBundle` and does not disable certificate checking.
 
-- [ ] Exported CSV values and units are verified against OpenRocket.
-- [ ] Offline and cloud replay agree at selected simulation timestamps.
-- [ ] Source/session labels and missing fields are correct.
-- [ ] Ground station marks stale telemetry after a network interruption.
-- [ ] Firebase Security Rules block unauthorized writes.
-- [ ] Cloud/NFC commands cannot trigger physical deployment hardware.
+## Why the main.cpp is beginner-friendly
 
-## 9. References and documentation
+1. `imuGetLatest()` returns a snapshot while a **separate 100 Hz sensor task**
+   continues recording measurements. `bmpGetLatest()` reads a separate 20 Hz
+   barometer snapshot.
+2. Students assemble `JsonDocument` fields into a telemetry packet, including
+   optional `baro_pressure_pa`, `baro_temperature_c`, `baro_altitude_m` and
+   `baro_reference_pressure_pa`. The existing Nano-compatible required fields
+   are preserved.
+3. `firebasePut(path, json)` sends the packet over HTTPS (REST API).
+4. `HTTP 204` confirms the database accepted the upload; packet sequence increments
+   **only for confirmed uploads**.
+5. Typing **R** calls `firebaseGet()` (HTTPS GET) to retrieve that same JSON.
+6. The goal is **2 Hz**, not a guaranteed hard-real-time 500 ms rate; HTTPS
+   setup, network latency and Firebase can delay each request. The firmware prints
+   actual elapsed request duration.
 
-- [OpenRocket — Advanced flight simulation and export](https://openrocket.readthedocs.io/en/latest/user_guide/advanced_flight_simulation.html)
-- [Firebase Realtime Database — REST API](https://firebase.google.com/docs/database/rest/start)
-- [Firebase — REST authentication](https://firebase.google.com/docs/database/rest/auth)
-- [Firebase — Read and write data](https://firebase.google.com/docs/database/web/read-and-write)
-- [Firebase — Security Rules](https://firebase.google.com/docs/database/security)
-- [Rocket telemetry dashboard inspiration — Model Rocket Telemetry, Part 2](https://johnjonesfour.com/2020/10/04/model-rocket-telemetry-part-2/)
+## Firebase anonymous identity and access rules
+
+The ESP32 uses the same **anonymous Firebase REST authentication** as the original
+Nano Python publisher, and stores its refresh token in ESP32 nonvolatile storage.
+Its telemetry is written to:
+
+`/nanoTelemetry/ESP32_ANONYMOUS_UID/latest`
+
+This intentionally retains the Nano packet's `nano_uptime_ms` field for your
+existing schema validation, even though its value is actually ESP32 uptime.
+The packet also contains `esp32_uptime_ms` to clarify the source.
+
+* Your existing Nano rules already allow the **ESP32 itself** to read and write
+  its **own** `/nanoTelemetry/UID/latest` record. You do **not** need to change
+  the rules to demonstrate HTTP PUT and GET on the same ESP32.
+* The **Python ground station** signs in with its **own** anonymous UID, so it
+  cannot read another device's data unless you explicitly authorize it.
+* To use the cloud dashboard, use the provided `firebase.rules.json` and replace
+  **both** `REPLACE_ESP32_UID` and `REPLACE_VIEWER_UID` with the corresponding
+  real UIDs before publishing those rules in Firebase Console → Realtime Database
+  → Rules. Do not publish placeholder values or use `".read": true`.
+
+## Python ground station (no USB required for ESP32 data)
+
+Install original dashboard requirements:
+
+```powershell
+py -m pip install -r requirements.txt
+```
+
+Register a persistent **anonymous viewer account**:
+
+```powershell
+py ground_station/esp32_cloud_receiver.py --register
+```
+
+The command prints a viewer UID. Replace `REPLACE_VIEWER_UID` in the supplied
+rules, and replace `REPLACE_ESP32_UID` with the UID printed by your ESP32 after
+login. Publish the updated rules in Firebase Console.
+
+Launch the existing live graphs / 3D viewer:
+
+```powershell
+py ground_station/dashboard.py --esp32-cloud --esp32-uid YOUR_ESP32_UID --view imu --nose-axis +z
+```
+
+To troubleshoot rules without the GUI:
+
+```powershell
+py ground_station/esp32_cloud_receiver.py --uid YOUR_ESP32_UID
+```
+
+This displays a JSON snapshot if the viewer has read permission. The Python
+receiver stores its refresh token locally at `ground_station/viewer_token.json`.
+That file is excluded from Git and should remain private.
+
+For the ESP32 cloud dashboard, switch to **SHOW TELEMETRY VIEW** to see live
+BMP280 **ALTITUDE** (relative to start), **PRESSURE** (hPa) and
+**TEMPERATURE** (°C). The cloud receiver converts Firebase JSON into the
+original `Q` IMU packet and an optional `B` barometer packet. Older Nano-only
+streams remain compatible. Vertical velocity and RSSI are **not invented**;
+they remain N/A.
+
+The **original Nano dashboard modes** still work, e.g.:
+
+```powershell
+py ground_station/dashboard.py --demo
+py ground_station/dashboard.py --firebase
+py ground_station/dashboard.py --port COM3
+```
+
+## Workshop troubleshooting
+
+| Symptom | What to check |
+|---|---|
+| Sensor not found | MPU6050 address 0x68, SDA=21, SCL=22, 3V3, GND |
+| BMP280 not found | Check CSB HIGH, SDO LOW (0x76) or HIGH (0x77), 3V3 power and shared I2C wiring |
+| Wi-Fi timeout | Network is 2.4 GHz and credentials are correct |
+| TLS X509 error | NTP clock and Google root certificate chain |
+| HTTP 401 / 403 | Anonymous Auth enabled; UID matches Firebase Rules |
+| HTTP 204 | Successful upload without response body |
+| HTTP 200 on GET | Successful read and JSON response |
+| ~76 seconds between writes | Never call getString() for HTTP 204 (already fixed) |
+| Viewer HTTP 401 | Viewer token expired; re-register if needed |
+| Viewer HTTP 403 | Viewer UID not authorized for that specific ESP32 UID |
+
+## Security and scope
+
+This is a **bench demonstration using Wi-Fi instead of radio**. Not flight-tested
+rocket avionics. The public Firebase Web API key identifies the project, but
+Wi-Fi credentials, refresh tokens and ID tokens must remain private. Avoid
+`setInsecure()` for authenticated requests. Trusted roots might need updating
+if Google's deployed certificate chain changes.
+
+## Verification
+
+Python scripts were syntax-tested, including the optional BMP280 cloud packet;
+packet conversion was checked against the
+original `attitude_math.parse_packet`, and the packaged source files were checked
+for expected entry points. **Hardware upload, real-world 2 Hz rate and Firebase
+cloud dashboard access must still be validated on your ESP32/PC.**
